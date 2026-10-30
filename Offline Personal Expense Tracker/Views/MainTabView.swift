@@ -5,34 +5,33 @@ struct MainTabView: View {
 
     var body: some View {
         @Bindable var router = router
-        TabView(selection: $router.tab) {
-            DashboardView()
-                .tabItem { Label("Dashboard", systemImage: "square.grid.2x2") }
-                .tag(AppTab.dashboard)
-            PhoneDealListView()
-                .tabItem { Label("Phones", systemImage: "iphone") }
-                .tag(AppTab.phones)
-            TransactionListView()
-                .tabItem { Label("Transactions", systemImage: "list.bullet") }
-                .tag(AppTab.transactions)
-            BudgetListView()
-                .tabItem { Label("Budgets", systemImage: "chart.pie") }
-                .tag(AppTab.budgets)
-            ReportsView()
-                .tabItem { Label("Reports", systemImage: "chart.bar") }
-                .tag(AppTab.reports)
-            SettingsView()
-                .tabItem { Label("Settings", systemImage: "gearshape") }
-                .tag(AppTab.settings)
-        }
-        .toolbar(.hidden, for: .tabBar)
-        .safeAreaInset(edge: .bottom, spacing: 0) {
-            AppTabBar(selection: $router.tab)
-        }
-        .sheet(item: $router.createType) { type in
-            NavigationStack {
-                TransactionEditorView(mode: .create(type))
+        selectedTab
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .safeAreaInset(edge: .bottom, spacing: 0) {
+                AppTabBar(selection: $router.tab)
             }
+            .sheet(item: $router.createType) { type in
+                NavigationStack {
+                    TransactionEditorView(mode: .create(type))
+                }
+            }
+    }
+
+    @ViewBuilder
+    private var selectedTab: some View {
+        switch router.tab {
+        case .dashboard:
+            DashboardView()
+        case .phones:
+            PhoneDealListView()
+        case .transactions:
+            TransactionListView()
+        case .budgets:
+            BudgetListView()
+        case .reports:
+            ReportsView()
+        case .settings:
+            SettingsView()
         }
     }
 }

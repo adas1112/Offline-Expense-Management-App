@@ -129,6 +129,7 @@ enum PhoneDealService {
         transaction.merchant = deal.dealerName
         transaction.wallet = wallet
         transaction.category = category
+        transaction.paymentMethod = wallet.walletType == .cash ? .cash : (wallet.walletType == .digital ? .digitalWallet : transaction.paymentMethod)
         transaction.tags = ["phone"]
         transaction.updatedAt = Date()
         payment.transactionID = transaction.id

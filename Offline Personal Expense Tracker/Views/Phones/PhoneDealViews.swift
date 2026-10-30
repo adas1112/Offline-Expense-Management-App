@@ -252,7 +252,6 @@ private struct PhoneDealRow: View {
 struct PhoneDealDetailView: View {
     @Environment(\.modelContext) private var modelContext
     @Environment(\.dismiss) private var dismiss
-    @Query(sort: \Wallet.name) private var wallets: [Wallet]
     var deal: PhoneDeal
     @State private var showEditor = false
     @State private var showPayment = false
@@ -324,7 +323,6 @@ struct PhoneDealDetailView: View {
                         }
                     }
                     Button("Record dealer payment") { showPayment = true }
-                        .disabled(deal.receiptWallet == nil && wallets.filter { !$0.isArchived && !$0.walletType.isLiability }.isEmpty)
                 }
             }
             Section {
@@ -371,6 +369,48 @@ struct PhoneDealDetailView: View {
     }
 }
 
+private enum ReceiptChannel: String, CaseIterable, Identifiable {
+    case cash
+    case online
+
+    var id: String { rawValue }
+    var title: String { self == .cash ? "Cash" : "Online" }
+
+    var walletType: WalletType { self == .cash ? .cash : .digital }
+
+    static func matching(_ wallet: Wallet?) -> ReceiptChannel {
+        wallet?.walletType == .digital ? .online : .cash
+    }
+
+    @MainActor
+    static func wallet(
+        for channel: ReceiptChannel,
+        currencyCode: String,
+        wallets: [Wallet],
+        context: ModelContext
+    ) -> Wallet {
+        let code = currencyCode.uppercased()
+        if let existing = wallets.first(where: {
+            !$0.isArchived
+                && !$0.walletType.isLiability
+                && $0.currencyCode == code
+                && $0.name.caseInsensitiveCompare(channel.title) == .orderedSame
+        }) {
+            return existing
+        }
+        let created = Wallet(
+            name: channel.title,
+            type: channel.walletType,
+            currencyCode: code,
+            openingBalance: 0,
+            iconName: channel.walletType.systemImage,
+            colorHex: channel == .cash ? "1A6B4A" : "1D4E89"
+        )
+        context.insert(created)
+        return created
+    }
+}
+
 private struct ListSaleRequest: Identifiable {
     enum Kind {
         case pending
@@ -399,7 +439,7 @@ private struct ListSaleSheet: View {
     @State private var quantitySold = 1
     @State private var saleText = ""
     @State private var date = Date()
-    @State private var walletID: UUID?
+    @State private var channel: ReceiptChannel = .cash
     @State private var messages: [String] = []
 
     var body: some View {
@@ -422,13 +462,14 @@ private struct ListSaleSheet: View {
                 }
             }
             if recordsPayment {
-                Section {
-                    Picker("Received in", selection: $walletID) {
-                        Text("Choose").tag(Optional<UUID>.none)
-                        ForEach(receivingWallets) { wallet in
-                            Text(wallet.name).tag(Optional(wallet.id))
+                Section("Received in") {
+                    Picker("Received in", selection: $channel) {
+                        ForEach(ReceiptChannel.allCases) { item in
+                            Text(item.title).tag(item)
                         }
                     }
+                    .pickerStyle(.segmented)
+                    .labelsHidden()
                     Text(deal.isSold
                          ? "Sold records the pending amount as received."
                          : "Sold records the sale and the full payment together.")
@@ -459,12 +500,8 @@ private struct ListSaleSheet: View {
             quantitySold = deal.isSold ? max(deal.quantitySold, 1) : deal.quantity
             if deal.saleAmount > 0 { saleText = Money.exportString(deal.saleAmount) }
             date = deal.saleDate ?? Date()
-            walletID = deal.receiptWallet?.id ?? receivingWallets.first?.id
+            channel = ReceiptChannel.matching(deal.receiptWallet)
         }
-    }
-
-    private var receivingWallets: [Wallet] {
-        wallets.filter { !$0.isArchived && !$0.walletType.isLiability && $0.currencyCode == deal.currencyCode }
     }
 
     private func save() {
@@ -483,12 +520,6 @@ private struct ListSaleSheet: View {
         if quantitySold < 1 || quantitySold > deal.quantity {
             errors.append("The number sold cannot be more than the number you bought.")
         }
-        let wallet = receivingWallets.first { $0.id == walletID }
-        if recordsPayment, wallet == nil {
-            errors.append(receivingWallets.isEmpty
-                          ? "Add a \(deal.currencyCode) cash or bank wallet before marking this sold."
-                          : "Choose the wallet where the dealer paid.")
-        }
         guard errors.isEmpty else {
             messages = errors
             return
@@ -498,9 +529,10 @@ private struct ListSaleSheet: View {
         deal.quantitySold = quantitySold
         deal.saleAmount = sale
         deal.saleDate = date
-        if recordsPayment, let wallet {
+        if recordsPayment {
+            let wallet = receiptWallet(for: channel)
             deal.receiptWallet = wallet
-            let payment = DealerPayment(amount: sale, date: date, note: "")
+            let payment = DealerPayment(amount: sale, date: date, note: channel.title)
             payment.deal = deal
             modelContext.insert(payment)
         }
@@ -518,14 +550,9 @@ private struct ListSaleSheet: View {
             messages = ["This dealer has already paid."]
             return
         }
-        guard let wallet = receivingWallets.first(where: { $0.id == walletID }) else {
-            messages = [receivingWallets.isEmpty
-                        ? "Add a \(deal.currencyCode) cash or bank wallet before marking this sold."
-                        : "Choose the wallet where the dealer paid."]
-            return
-        }
+        let wallet = receiptWallet(for: channel)
         deal.receiptWallet = wallet
-        let payment = DealerPayment(amount: pending, date: date, note: "")
+        let payment = DealerPayment(amount: pending, date: date, note: channel.title)
         payment.deal = deal
         modelContext.insert(payment)
         do {
@@ -534,6 +561,10 @@ private struct ListSaleSheet: View {
         } catch {
             messages = ["This payment could not be saved."]
         }
+    }
+
+    private func receiptWallet(for channel: ReceiptChannel) -> Wallet {
+        ReceiptChannel.wallet(for: channel, currencyCode: deal.currencyCode, wallets: wallets, context: modelContext)
     }
 }
 
@@ -545,7 +576,7 @@ private struct DealerPaymentSheet: View {
     @State private var amountText = ""
     @State private var date = Date()
     @State private var note = ""
-    @State private var walletID: UUID?
+    @State private var channel: ReceiptChannel = .cash
     @State private var messages: [String] = []
 
     var body: some View {
@@ -555,12 +586,12 @@ private struct DealerPaymentSheet: View {
                 .monospacedDigit()
             DatePicker("Date", selection: $date, displayedComponents: .date)
             TextField("Note", text: $note)
-            Picker("Received in", selection: $walletID) {
-                Text("Choose").tag(Optional<UUID>.none)
-                ForEach(receivingWallets) { wallet in
-                    Text(wallet.name).tag(Optional(wallet.id))
+            Picker("Received in", selection: $channel) {
+                ForEach(ReceiptChannel.allCases) { item in
+                    Text(item.title).tag(item)
                 }
             }
+            .pickerStyle(.segmented)
             if !messages.isEmpty {
                 ForEach(messages, id: \.self) { Text($0).font(.footnote).foregroundStyle(Theme.expense) }
             }
@@ -572,12 +603,8 @@ private struct DealerPaymentSheet: View {
             ToolbarItem(placement: .confirmationAction) { Button("Save") { save() } }
         }
         .onAppear {
-            walletID = deal.receiptWallet?.id ?? receivingWallets.first?.id
+            channel = ReceiptChannel.matching(deal.receiptWallet)
         }
-    }
-
-    private var receivingWallets: [Wallet] {
-        wallets.filter { !$0.isArchived && !$0.walletType.isLiability }
     }
 
     private func save() {
@@ -585,16 +612,10 @@ private struct DealerPaymentSheet: View {
             messages = ["Enter the amount the dealer paid."]
             return
         }
-        guard let walletID, let wallet = wallets.first(where: { $0.id == walletID }) else {
-            messages = ["Choose the wallet where this payment arrived."]
-            return
-        }
-        if wallet.currencyCode != deal.currencyCode {
-            messages = ["This payment must use \(deal.currencyCode), the same currency as the purchase."]
-            return
-        }
+        let wallet = ReceiptChannel.wallet(for: channel, currencyCode: deal.currencyCode, wallets: wallets, context: modelContext)
         deal.receiptWallet = wallet
-        let payment = DealerPayment(amount: amount, date: date, note: note.trimmingCharacters(in: .whitespacesAndNewlines))
+        let trimmed = note.trimmingCharacters(in: .whitespacesAndNewlines)
+        let payment = DealerPayment(amount: amount, date: date, note: trimmed.isEmpty ? channel.title : trimmed)
         payment.deal = deal
         modelContext.insert(payment)
         do {
