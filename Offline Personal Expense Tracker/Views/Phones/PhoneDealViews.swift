@@ -71,12 +71,6 @@ struct PhoneDealListView: View {
                                                 .tint(.orange)
                                         }
                                     }
-                                    .swipeActions(edge: .trailing, allowsFullSwipe: false) {
-                                        if canMarkSold(deal) {
-                                            Button("Sold") { saleRequest = ListSaleRequest(deal: deal, kind: .sold) }
-                                                .tint(Theme.income)
-                                        }
-                                    }
                                 }
                             }
                         }
@@ -101,7 +95,7 @@ struct PhoneDealListView: View {
             .sheet(item: $saleRequest) { request in
                 NavigationStack {
                     if let deal = deals.first(where: { $0.persistentModelID == request.dealID }) {
-                        ListSaleSheet(deal: deal, recordsPayment: request.kind == .sold)
+                        ListSaleSheet(deal: deal, recordsPayment: true)
                     }
                 }
             }
@@ -110,34 +104,17 @@ struct PhoneDealListView: View {
 
     @ViewBuilder
     private func listActions(for deal: PhoneDeal) -> some View {
-        let pending = canMarkPending(deal)
-        let sold = canMarkSold(deal)
-        if pending || sold {
-            HStack(spacing: 8) {
-                if pending {
-                    Button("Pending") { saleRequest = ListSaleRequest(deal: deal, kind: .pending) }
-                        .buttonStyle(.borderedProminent)
-                        .controlSize(.small)
-                        .tint(.orange)
-                }
-                if sold {
-                    Button("Sold") { saleRequest = ListSaleRequest(deal: deal, kind: .sold) }
-                        .buttonStyle(.borderedProminent)
-                        .controlSize(.small)
-                        .tint(Theme.income)
-                }
-            }
-            .buttonStyle(.borderless)
+        if canMarkPending(deal) {
+            Button("Pending") { saleRequest = ListSaleRequest(deal: deal, kind: .pending) }
+                .buttonStyle(.borderedProminent)
+                .controlSize(.small)
+                .tint(.orange)
         }
     }
 
+    /// One sale entry from the list. After the dealer and price are saved, the payment is received and the row has no second sale button.
     private func canMarkPending(_ deal: PhoneDeal) -> Bool {
-        deal.lotPosition.stage == .inStock
-    }
-
-    private func canMarkSold(_ deal: PhoneDeal) -> Bool {
-        let position = deal.lotPosition
-        return position.stage == .inStock || position.pendingPayment > 0
+        !deal.isSold && deal.lotPosition.stage == .inStock
     }
 
     private var currency: String { settingsRows.first?.baseCurrencyCode ?? "USD" }
@@ -470,15 +447,7 @@ private struct ListSaleSheet: View {
                     }
                     .pickerStyle(.segmented)
                     .labelsHidden()
-                    Text(deal.isSold
-                         ? "Sold records the pending amount as received."
-                         : "Sold records the sale and the full payment together.")
-                        .font(.footnote)
-                        .foregroundStyle(.secondary)
-                }
-            } else {
-                Section {
-                    Text("Pending keeps the sale open. The dealer still owes the sale price until you mark it sold.")
+                    Text("This records the sale once and marks the dealer payment as received.")
                         .font(.footnote)
                         .foregroundStyle(.secondary)
                 }
@@ -489,7 +458,7 @@ private struct ListSaleSheet: View {
                 }
             }
         }
-        .navigationTitle(recordsPayment ? "Sold" : "Pending")
+        .navigationTitle("Pending")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } }
